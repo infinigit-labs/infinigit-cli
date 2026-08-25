@@ -1,6 +1,6 @@
 //! InfiniGit command-line authentication and configuration.
 
-use std::{env, process::{Command, ExitCode}};
+use std::{env, fs::File, io::Read, process::{Command, ExitCode}};
 
 const DEFAULT_IDENTITY: &str = "infinigit";
 const DEFAULT_AUTH: &str = "https://id.ai";
@@ -12,6 +12,7 @@ enum AuthCommand {
     Status { name: String },
     Reauth { name: String },
     Logout { name: String },
+    LinkDevice { name: String, label: String, storage: String, read_only: bool },
 }
 
 fn valid_name(value: &str) -> bool {
@@ -45,6 +46,13 @@ fn parse(args: &[String]) -> Result<AuthCommand, String> {
         "status" => Ok(AuthCommand::Status { name }),
         "reauth" => Ok(AuthCommand::Reauth { name }),
         "logout" => Ok(AuthCommand::Logout { name }),
+        "link-device" => {
+            let label = value(args, "--label", "CLI device")?;
+            let storage = value(args, "--storage", "keyring")?;
+            if label.is_empty() || label.len() > 80 || !label.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b' ' | b'-' | b'_' | b'.')) { return Err("invalid device label".into()); }
+            if !matches!(storage.as_str(), "keyring" | "password" | "plaintext") { return Err("invalid identity storage".into()); }
+            Ok(AuthCommand::LinkDevice { name, label, storage, read_only: args.iter().any(|arg| arg == "--read-only") })
+        }
         _ => Err("usage: infinigit auth <login|status|reauth|logout> [options]".into()),
     }
 }
@@ -100,6 +108,25 @@ fn execute(command: AuthCommand) -> Result<String, String> {
             run("icp", &["identity", "delete", &name])?;
             let _ = run("git", &["config", "--global", "--unset-all", "infinigit.identity"]);
             Ok(format!("Removed InfiniGit identity '{name}' from this device."))
+        }
+        AuthCommand::LinkDevice { name, label, storage, read_only } => {
+            let identities = run("icp", &["identity", "list", "-q"])?;
+            if identities.lines().any(|existing| existing == name) {
+                return Err(format!("identity '{name}' already exists; choose another --name or log out first"));
+            }
+            run_interactive("icp", &["identity", "new", &name, "--storage", &storage])?;
+            let directory = run("git", &["config", "--global", "--get", "infinigit.directory-canister"])?;
+            let network = run("git", &["config", "--global", "--get", "infinigit.network"])?;
+            let mut random = [0u8; 32];
+            File::open("/dev/urandom").and_then(|mut file| file.read_exact(&mut random)).map_err(|error| format!("cannot generate pairing code: {error}"))?;
+            let digest = random.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+            let candid = format!("(\"{label}\", \"{digest}\", true, {}, null)", !read_only);
+            let response = run("icp", &["canister", "call", &directory, "request_device_link", &candid, "--identity", &name, "--network", &network])?;
+            let marker = "id = ";
+            let id = response.find(marker).and_then(|index| response[index + marker.len()..].split(|character: char| !character.is_ascii_digit()).next()).filter(|value| !value.is_empty()).ok_or("directory returned no device request id")?;
+            configure(&name, None, None)?;
+            let app = run("git", &["config", "--global", "--get", "infinigit.app-origin"]).unwrap_or_else(|_| DEFAULT_APP.into());
+            Ok(format!("Device identity created.\n\nOpen {app}/#/settings/ssh and enter this pairing code:\n{id}:{digest}\n\nThe request expires in 15 minutes. Git will use '{name}' after approval."))
         }
     }
 }

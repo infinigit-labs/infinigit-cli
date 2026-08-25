@@ -80,3 +80,40 @@ fn logout_cannot_delete_an_unrelated_icp_identity() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("refusing to delete"));
 }
+
+#[test]
+fn independent_device_login_creates_a_scoped_pairing_request() {
+    let temp = TempDir::new().unwrap();
+    let icp = temp.path().join("icp");
+    let log = temp.path().join("icp.log");
+    fs::write(&icp, r#"#!/usr/bin/env bash
+set -e
+printf '%s\n' "$*" >>"$INFINIGIT_TEST_ICP_LOG"
+if [[ "$*" == 'identity list -q' ]]; then exit 0; fi
+if [[ "$*" == *'request_device_link'* ]]; then printf 'variant { ok = record { id = 42 : nat } }\n'; fi
+"#).unwrap();
+    fs::set_permissions(&icp, fs::Permissions::from_mode(0o755)).unwrap();
+    let config = temp.path().join("gitconfig");
+    for (key, value) in [
+        ("infinigit.directory-canister", "aaaaa-aa"),
+        ("infinigit.network", "http://127.0.0.1:4943"),
+        ("infinigit.app-origin", "http://frontend.localhost:4943"),
+    ] {
+        assert!(Command::new("git").args(["config", "--global", key, value]).env("GIT_CONFIG_GLOBAL", &config).status().unwrap().success());
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_infinigit"))
+        .args(["auth", "link-device", "--name", "laptop", "--label", "Work laptop", "--read-only", "--storage", "plaintext"])
+        .env("PATH", path_with(temp.path()))
+        .env("GIT_CONFIG_GLOBAL", &config)
+        .env("INFINIGIT_TEST_ICP_LOG", &log)
+        .output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("42:"));
+    assert!(stdout.contains("/#/settings/ssh"));
+    let calls = fs::read_to_string(log).unwrap();
+    assert!(calls.contains("identity new laptop --storage plaintext"));
+    assert!(calls.contains("request_device_link"));
+    assert!(calls.contains("true, false, null"));
+    assert!(calls.contains("--identity laptop --network http://127.0.0.1:4943"));
+}
