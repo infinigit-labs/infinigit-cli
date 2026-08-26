@@ -97,12 +97,13 @@ if [[ "$*" == *'request_device_link'* ]]; then printf 'variant { ok = record { i
     for (key, value) in [
         ("infinigit.directory-canister", "aaaaa-aa"),
         ("infinigit.network", "http://127.0.0.1:4943"),
+        ("infinigit.root-key", "fetch"),
         ("infinigit.app-origin", "http://frontend.localhost:4943"),
     ] {
         assert!(Command::new("git").args(["config", "--global", key, value]).env("GIT_CONFIG_GLOBAL", &config).status().unwrap().success());
     }
     let output = Command::new(env!("CARGO_BIN_EXE_infinigit"))
-        .args(["auth", "link-device", "--name", "laptop", "--label", "Work laptop", "--read-only", "--storage", "plaintext"])
+        .args(["auth", "link-device", "--name", "laptop", "--label", "Work laptop", "--read-only", "--storage", "plaintext", "--directory", "aaaaa-aa", "--network", "http://127.0.0.1:4943", "--root-key", "fetch"])
         .env("PATH", path_with(temp.path()))
         .env("GIT_CONFIG_GLOBAL", &config)
         .env("INFINIGIT_TEST_ICP_LOG", &log)
@@ -115,7 +116,7 @@ if [[ "$*" == *'request_device_link'* ]]; then printf 'variant { ok = record { i
     assert!(calls.contains("identity new laptop --storage plaintext"));
     assert!(calls.contains("request_device_link"));
     assert!(calls.contains("true, false, null"));
-    assert!(calls.contains("--identity laptop --network http://127.0.0.1:4943"));
+    assert!(calls.contains("--identity laptop --network http://127.0.0.1:4943 --root-key fetch"));
 }
 
 #[test]
@@ -134,15 +135,63 @@ if [[ "$*" == *'request_device_link'* ]]; then printf 'variant { ok = record { i
     for (key, value) in [
         ("infinigit.directory-canister", "aaaaa-aa"),
         ("infinigit.network", "http://127.0.0.1:4943"),
+        ("infinigit.root-key", "fetch"),
     ] {
         assert!(Command::new("git").args(["config", "--global", key, value]).env("GIT_CONFIG_GLOBAL", &config).status().unwrap().success());
     }
     let output = Command::new(env!("CARGO_BIN_EXE_infinigit"))
-        .args(["auth", "link-device", "--name", "headless", "--label", "Headless host"])
+        .args(["auth", "link-device", "--name", "headless", "--label", "Headless host", "--directory", "aaaaa-aa"])
         .env("PATH", path_with(temp.path()))
         .env("GIT_CONFIG_GLOBAL", &config)
         .env("INFINIGIT_TEST_ICP_LOG", &log)
         .output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    assert!(fs::read_to_string(log).unwrap().contains("identity new headless --storage plaintext"));
+    let calls = fs::read_to_string(log).unwrap();
+    assert!(calls.contains("identity new headless --storage plaintext"));
+    assert!(calls.contains("--network ic --root-key mainnet"));
+}
+
+#[test]
+fn device_link_can_resume_with_an_identity_created_by_a_failed_attempt() {
+    let temp = TempDir::new().unwrap();
+    let icp = temp.path().join("icp");
+    let log = temp.path().join("icp.log");
+    fs::write(&icp, r#"#!/usr/bin/env bash
+set -e
+printf '%s\n' "$*" >>"$INFINIGIT_TEST_ICP_LOG"
+if [[ "$*" == 'identity list -q' ]]; then printf 'my-laptop\n'; fi
+if [[ "$*" == *'request_device_link'* ]]; then printf 'variant { ok = record { id = 9 : nat } }\n'; fi
+"#).unwrap();
+    fs::set_permissions(&icp, fs::Permissions::from_mode(0o755)).unwrap();
+    let config = temp.path().join("gitconfig");
+    for (key, value) in [
+        ("infinigit.directory-canister", "aaaaa-aa"),
+        ("infinigit.network", "http://127.0.0.1:4943"),
+        ("infinigit.root-key", "fetch"),
+    ] {
+        assert!(Command::new("git").args(["config", "--global", key, value]).env("GIT_CONFIG_GLOBAL", &config).status().unwrap().success());
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_infinigit"))
+        .args(["auth", "link-device", "--name", "my-laptop", "--label", "My laptop", "--reuse-existing", "--directory", "aaaaa-aa", "--network", "http://127.0.0.1:4943", "--root-key", "fetch"])
+        .env("PATH", path_with(temp.path()))
+        .env("GIT_CONFIG_GLOBAL", &config)
+        .env("INFINIGIT_TEST_ICP_LOG", &log)
+        .output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let calls = fs::read_to_string(log).unwrap();
+    assert!(!calls.contains("identity new my-laptop"));
+    assert!(calls.contains("--network http://127.0.0.1:4943 --root-key fetch"));
+}
+
+#[test]
+fn device_link_requires_a_directory_until_mainnet_is_deployed() {
+    let temp = TempDir::new().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_infinigit"))
+        .args(["auth", "link-device", "--name", "mainnet-device"])
+        .env_remove("INFINIGIT_DIRECTORY_CANISTER_ID")
+        .env("PATH", path_with(temp.path()))
+        .env("GIT_CONFIG_GLOBAL", temp.path().join("gitconfig"))
+        .output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("pass --directory"));
 }

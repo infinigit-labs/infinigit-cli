@@ -5,6 +5,7 @@ use std::{env, fs::File, io::Read, process::{Command, ExitCode}};
 const DEFAULT_IDENTITY: &str = "infinigit";
 const DEFAULT_AUTH: &str = "https://id.ai";
 const DEFAULT_APP: &str = "https://infinigit.com";
+const DEFAULT_NETWORK: &str = "ic";
 
 #[derive(Debug, PartialEq, Eq)]
 enum AuthCommand {
@@ -12,7 +13,7 @@ enum AuthCommand {
     Status { name: String },
     Reauth { name: String },
     Logout { name: String },
-    LinkDevice { name: String, label: String, storage: String, read_only: bool },
+    LinkDevice { name: String, label: String, storage: String, read_only: bool, reuse_existing: bool, directory: Option<String>, network: String, root_key: String },
 }
 
 fn valid_name(value: &str) -> bool {
@@ -49,9 +50,13 @@ fn parse(args: &[String]) -> Result<AuthCommand, String> {
         "link-device" => {
             let label = value(args, "--label", "CLI device")?;
             let storage = value(args, "--storage", "plaintext")?;
+            let directory = value(args, "--directory", &env::var("INFINIGIT_DIRECTORY_CANISTER_ID").unwrap_or_default())?;
+            let network = value(args, "--network", &env::var("INFINIGIT_NETWORK").unwrap_or_else(|_| DEFAULT_NETWORK.into()))?;
+            let root_key = value(args, "--root-key", &env::var("INFINIGIT_ROOT_KEY").unwrap_or_else(|_| "mainnet".into()))?;
             if label.is_empty() || label.len() > 80 || !label.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b' ' | b'-' | b'_' | b'.')) { return Err("invalid device label".into()); }
             if !matches!(storage.as_str(), "keyring" | "password" | "plaintext") { return Err("invalid identity storage".into()); }
-            Ok(AuthCommand::LinkDevice { name, label, storage, read_only: args.iter().any(|arg| arg == "--read-only") })
+            if network.is_empty() || !(matches!(root_key.as_str(), "mainnet" | "fetch") || root_key.len() == 266 && root_key.bytes().all(|byte| byte.is_ascii_hexdigit())) { return Err("invalid network or root key".into()); }
+            Ok(AuthCommand::LinkDevice { name, label, storage, read_only: args.iter().any(|arg| arg == "--read-only"), reuse_existing: args.iter().any(|arg| arg == "--reuse-existing"), directory: (!directory.is_empty()).then_some(directory), network, root_key })
         }
         _ => Err("usage: infinigit auth <login|status|reauth|logout> [options]".into()),
     }
@@ -109,19 +114,19 @@ fn execute(command: AuthCommand) -> Result<String, String> {
             let _ = run("git", &["config", "--global", "--unset-all", "infinigit.identity"]);
             Ok(format!("Removed InfiniGit identity '{name}' from this device."))
         }
-        AuthCommand::LinkDevice { name, label, storage, read_only } => {
+        AuthCommand::LinkDevice { name, label, storage, read_only, reuse_existing, directory, network, root_key } => {
+            let directory = directory.ok_or("InfiniGit is not deployed at a default mainnet canister yet; pass --directory <canister-id>, or use the complete local command printed by start-local.sh")?;
             let identities = run("icp", &["identity", "list", "-q"])?;
-            if identities.lines().any(|existing| existing == name) {
-                return Err(format!("identity '{name}' already exists; choose another --name or log out first"));
+            let exists = identities.lines().any(|existing| existing == name);
+            if exists && !reuse_existing {
+                return Err(format!("identity '{name}' already exists; choose another --name, or add --reuse-existing only if a previous link-device attempt created it"));
             }
-            run_interactive("icp", &["identity", "new", &name, "--storage", &storage])?;
-            let directory = run("git", &["config", "--global", "--get", "infinigit.directory-canister"])?;
-            let network = run("git", &["config", "--global", "--get", "infinigit.network"])?;
+            if !exists { run_interactive("icp", &["identity", "new", &name, "--storage", &storage])?; }
             let mut random = [0u8; 32];
             File::open("/dev/urandom").and_then(|mut file| file.read_exact(&mut random)).map_err(|error| format!("cannot generate pairing code: {error}"))?;
             let digest = random.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
             let candid = format!("(\"{label}\", \"{digest}\", true, {}, null)", !read_only);
-            let response = run("icp", &["canister", "call", &directory, "request_device_link", &candid, "--identity", &name, "--network", &network])?;
+            let response = run("icp", &["canister", "call", &directory, "request_device_link", &candid, "--identity", &name, "--network", &network, "--root-key", &root_key])?;
             let marker = "id = ";
             let id = response.find(marker).and_then(|index| response[index + marker.len()..].split(|character: char| !character.is_ascii_digit()).next()).filter(|value| !value.is_empty()).ok_or("directory returned no device request id")?;
             configure(&name, None, None)?;
@@ -161,6 +166,7 @@ mod tests {
         assert!(parse(&["auth".into(), "login".into(), "--name".into(), "../bad".into()]).is_err());
         assert!(parse(&["auth".into(), "login".into(), "--auth".into(), "http://evil.example".into()]).is_err());
         assert!(parse(&["auth".into(), "login".into(), "--storage".into(), "none".into()]).is_err());
+        assert!(parse(&["auth".into(), "link-device".into(), "--root-key".into(), "unsafe".into()]).is_err());
         assert!(parse(&["wrong".into()]).is_err());
     }
 }
