@@ -14,12 +14,13 @@ for the InfiniGit app origin, stores the session key using ICP CLI's selected
 storage backend, and configures Git to select that identity only for InfiniGit
 operations. It requires `git` and `icp` on `PATH`.
 
-Identity keys use ICP CLI's password-protected storage by default so the CLI
-also works on Linux servers, containers, and other sessions without a desktop
-Secret Service. ICP CLI will prompt for a password of at least eight characters.
-On a desktop with a working system keyring, opt into it with
-`--storage keyring`. Plaintext storage should only be used for disposable local
-development identities.
+Browser-linked login sessions use the system keyring by default. Independently
+linked CLI devices default to local plaintext key storage so pairing works
+without a desktop Secret Service or another password. Treat the key file like
+an SSH private key: the linked principal is separately revocable from InfiniGit
+account settings and receives only the repository access approved during
+pairing. Use `--storage keyring` or `--storage password` to opt into either
+protected backend when desired.
 
 `link-device` instead creates an independent local key and prints a short-lived
 pairing code. Review that code in the website settings to attach the device to

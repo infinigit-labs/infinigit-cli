@@ -31,7 +31,7 @@ if [[ "$*" == *'identity principal'* ]]; then printf 'aaaaa-aa\n'; fi
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert!(String::from_utf8_lossy(&output.stdout).contains("aaaaa-aa"));
     let calls = fs::read_to_string(&log).unwrap();
-    assert!(calls.contains("identity link web browser --auth https://id.ai --app https://code.example --storage password"));
+    assert!(calls.contains("identity link web browser --auth https://id.ai --app https://code.example --storage keyring"));
     assert!(calls.contains("identity principal --identity browser"));
     let configured = Command::new("git").args(["config", "--global", "--get", "infinigit.identity"]).env("GIT_CONFIG_GLOBAL", &git_config).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&configured.stdout).trim(), "browser");
@@ -119,7 +119,7 @@ if [[ "$*" == *'request_device_link'* ]]; then printf 'variant { ok = record { i
 }
 
 #[test]
-fn device_link_defaults_to_portable_password_storage() {
+fn device_link_defaults_to_passwordless_local_storage() {
     let temp = TempDir::new().unwrap();
     let icp = temp.path().join("icp");
     let log = temp.path().join("icp.log");
@@ -144,5 +144,5 @@ if [[ "$*" == *'request_device_link'* ]]; then printf 'variant { ok = record { i
         .env("INFINIGIT_TEST_ICP_LOG", &log)
         .output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    assert!(fs::read_to_string(log).unwrap().contains("identity new headless --storage password"));
+    assert!(fs::read_to_string(log).unwrap().contains("identity new headless --storage plaintext"));
 }

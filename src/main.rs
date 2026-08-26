@@ -37,7 +37,7 @@ fn parse(args: &[String]) -> Result<AuthCommand, String> {
         "login" => {
             let auth = value(args, "--auth", &env::var("INFINIGIT_AUTH_ORIGIN").unwrap_or_else(|_| DEFAULT_AUTH.into()))?;
             let app = value(args, "--app", &env::var("INFINIGIT_APP_ORIGIN").unwrap_or_else(|_| DEFAULT_APP.into()))?;
-            let storage = value(args, "--storage", "password")?;
+            let storage = value(args, "--storage", "keyring")?;
             if !matches!(storage.as_str(), "keyring" | "password" | "plaintext") { return Err("invalid identity storage".into()); }
             if !(auth.starts_with("https://") || auth.starts_with("http://localhost") || auth.starts_with("http://127.0.0.1")) { return Err("invalid auth origin".into()); }
             if !(app.starts_with("https://") || app.starts_with("http://localhost") || app.starts_with("http://127.0.0.1")) { return Err("invalid app origin".into()); }
@@ -48,7 +48,7 @@ fn parse(args: &[String]) -> Result<AuthCommand, String> {
         "logout" => Ok(AuthCommand::Logout { name }),
         "link-device" => {
             let label = value(args, "--label", "CLI device")?;
-            let storage = value(args, "--storage", "password")?;
+            let storage = value(args, "--storage", "plaintext")?;
             if label.is_empty() || label.len() > 80 || !label.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b' ' | b'-' | b'_' | b'.')) { return Err("invalid device label".into()); }
             if !matches!(storage.as_str(), "keyring" | "password" | "plaintext") { return Err("invalid identity storage".into()); }
             Ok(AuthCommand::LinkDevice { name, label, storage, read_only: args.iter().any(|arg| arg == "--read-only") })
@@ -146,7 +146,7 @@ mod tests {
     #[test]
     fn parses_login_defaults_and_overrides() {
         assert_eq!(parse(&["auth".into(), "login".into()]).unwrap(), AuthCommand::Login {
-            name: "infinigit".into(), auth: DEFAULT_AUTH.into(), app: DEFAULT_APP.into(), storage: "password".into(),
+            name: "infinigit".into(), auth: DEFAULT_AUTH.into(), app: DEFAULT_APP.into(), storage: "keyring".into(),
         });
         assert_eq!(parse(&["auth".into(), "login".into(), "--name".into(), "work".into(), "--app".into(), "https://code.example".into(), "--storage".into(), "password".into()]).unwrap(), AuthCommand::Login {
             name: "work".into(), auth: DEFAULT_AUTH.into(), app: "https://code.example".into(), storage: "password".into(),
