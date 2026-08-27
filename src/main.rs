@@ -27,6 +27,14 @@ fn value(args: &[String], flag: &str, fallback: &str) -> Result<String, String> 
     }
 }
 
+fn local_development() -> Result<bool, String> {
+    match env::var("INFINIGIT_LOCAL_DEV").ok().as_deref() {
+        None | Some("") | Some("0") | Some("false") => Ok(false),
+        Some("1") | Some("true") => Ok(true),
+        Some(_) => Err("INFINIGIT_LOCAL_DEV must be 1, true, 0, or false".into()),
+    }
+}
+
 fn parse(args: &[String]) -> Result<AuthCommand, String> {
     if args.first().map(String::as_str) != Some("auth") {
         return Err("usage: infinigit auth <login|status|reauth|logout> [options]".into());
@@ -48,11 +56,15 @@ fn parse(args: &[String]) -> Result<AuthCommand, String> {
         "reauth" => Ok(AuthCommand::Reauth { name }),
         "logout" => Ok(AuthCommand::Logout { name }),
         "link-device" => {
+            let local_dev = local_development()?;
             let label = value(args, "--label", "CLI device")?;
             let storage = value(args, "--storage", "plaintext")?;
-            let directory = value(args, "--directory", &env::var("INFINIGIT_DIRECTORY_CANISTER_ID").unwrap_or_default())?;
-            let network = value(args, "--network", &env::var("INFINIGIT_NETWORK").unwrap_or_else(|_| DEFAULT_NETWORK.into()))?;
-            let root_key = value(args, "--root-key", &env::var("INFINIGIT_ROOT_KEY").unwrap_or_else(|_| "mainnet".into()))?;
+            let directory_fallback = env::var("INFINIGIT_DIRECTORY_CANISTER_ID").ok().or_else(|| local_dev.then(|| run("git", &["config", "--global", "--get", "infinigit.directory-canister"]).ok()).flatten()).unwrap_or_default();
+            let network_fallback = env::var("INFINIGIT_NETWORK").ok().or_else(|| local_dev.then(|| run("git", &["config", "--global", "--get", "infinigit.network"]).ok()).flatten()).unwrap_or_else(|| if local_dev { "http://127.0.0.1:4943".into() } else { DEFAULT_NETWORK.into() });
+            let root_key_fallback = env::var("INFINIGIT_ROOT_KEY").ok().or_else(|| local_dev.then(|| run("git", &["config", "--global", "--get", "infinigit.root-key"]).ok()).flatten()).unwrap_or_else(|| if local_dev { "fetch".into() } else { "mainnet".into() });
+            let directory = value(args, "--directory", &directory_fallback)?;
+            let network = value(args, "--network", &network_fallback)?;
+            let root_key = value(args, "--root-key", &root_key_fallback)?;
             if label.is_empty() || label.len() > 80 || !label.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b' ' | b'-' | b'_' | b'.')) { return Err("invalid device label".into()); }
             if !matches!(storage.as_str(), "keyring" | "password" | "plaintext") { return Err("invalid identity storage".into()); }
             if network.is_empty() || !(matches!(root_key.as_str(), "mainnet" | "fetch") || root_key.len() == 266 && root_key.bytes().all(|byte| byte.is_ascii_hexdigit())) { return Err("invalid network or root key".into()); }
