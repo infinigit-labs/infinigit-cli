@@ -42,6 +42,9 @@ Identity or other machines.
 
 ## Releases
 
+See [PUBLISHING.md](PUBLISHING.md) for registry setup, versioning, publishing,
+verification, and partial-release recovery.
+
 Tags named `v<version>` publish the crate and npm package and attach native
 Linux, macOS, and Windows binaries to a GitHub Release. Keep the versions in
 `Cargo.toml` and `package.json` identical before tagging. The `release`
