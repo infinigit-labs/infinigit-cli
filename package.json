@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Browser-linked Internet Identity CLI for InfiniGit",
   "license": "Apache-2.0",
-  "repository": "github:mclovin-clawbot/infinigit-cli",
+  "repository": "github:infinigit-labs/infinigit-cli",
   "homepage": "https://infinigit.com",
   "os": ["darwin", "linux", "win32"],
   "cpu": ["x64", "arm64"],
