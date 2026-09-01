@@ -1,0 +1,18 @@
+{
+  "name": "infinigit-cli",
+  "version": "0.1.0",
+  "description": "Browser-linked Internet Identity CLI for InfiniGit",
+  "license": "Apache-2.0",
+  "repository": "github:mclovin-clawbot/infinigit-cli",
+  "homepage": "https://infinigit.com",
+  "os": ["darwin", "linux", "win32"],
+  "cpu": ["x64", "arm64"],
+  "bin": { "infinigit": "npm/bin/infinigit.js" },
+  "files": ["npm/bin", "npm/lib"],
+  "scripts": {
+    "postinstall": "node npm/lib/install.js",
+    "test:npm": "node --test npm/test/*.test.js"
+  },
+  "engines": { "node": ">=18" },
+  "publishConfig": { "access": "public", "provenance": true }
+}

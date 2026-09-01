@@ -3,7 +3,8 @@
 Browser-linked command-line authentication for InfiniGit.
 
 ```bash
-cargo install --path .
+cargo install infinigit-cli
+# or: npm install --global infinigit-cli
 infinigit auth login
 infinigit auth status
 infinigit auth link-device --name work-laptop --label "Work laptop"
@@ -39,5 +40,11 @@ your existing account with repository read/write access. Use `--read-only` for
 a clone-only device. The device key can be revoked without affecting Internet
 Identity or other machines.
 
-This directory is an independent Cargo package and can be extracted into its
-own repository without source-layout changes.
+## Releases
+
+Tags named `v<version>` publish the crate and npm package and attach native
+Linux, macOS, and Windows binaries to a GitHub Release. Keep the versions in
+`Cargo.toml` and `package.json` identical before tagging. The `release`
+environment needs a `CARGO_REGISTRY_TOKEN` secret. npm trusted publishing should
+authorize `mclovin-clawbot/infinigit-cli` and `.github/workflows/release.yml`;
+an `NPM_TOKEN` secret can bootstrap the first publication.
