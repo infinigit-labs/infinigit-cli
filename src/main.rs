@@ -14,6 +14,10 @@ const DEFAULT_NETWORK: &str = "ic";
 
 #[derive(Debug, PartialEq, Eq)]
 enum AuthCommand {
+    Import {
+        source: String,
+        destination: String,
+    },
     Login {
         name: String,
         auth: String,
@@ -68,8 +72,30 @@ fn local_development() -> Result<bool, String> {
 }
 
 fn parse(args: &[String]) -> Result<AuthCommand, String> {
+    if args.first().map(String::as_str) == Some("import") {
+        let source = args
+            .get(1)
+            .filter(|value| !value.starts_with('-'))
+            .cloned()
+            .ok_or("usage: infinigit import <source-git-url> <igit://host/namespace/repository>")?;
+        let destination = args
+            .get(2)
+            .filter(|value| value.starts_with("igit://") && !value.contains(char::is_whitespace))
+            .cloned()
+            .ok_or("import destination must be an igit:// repository URL")?;
+        if args.len() != 3 {
+            return Err(
+                "usage: infinigit import <source-git-url> <igit://host/namespace/repository>"
+                    .into(),
+            );
+        }
+        return Ok(AuthCommand::Import {
+            source,
+            destination,
+        });
+    }
     if args.first().map(String::as_str) != Some("auth") {
-        return Err("usage: infinigit auth <login|status|reauth|logout> [options]".into());
+        return Err("usage: infinigit <auth|import> [options]".into());
     }
     let action = args
         .get(1)
@@ -256,6 +282,39 @@ fn configure(name: &str, auth: Option<&str>, app: Option<&str>) -> Result<(), St
 
 fn execute(command: AuthCommand) -> Result<String, String> {
     match command {
+        AuthCommand::Import {
+            source,
+            destination,
+        } => {
+            let checkout = tempfile::Builder::new()
+                .prefix("infinigit-import-")
+                .tempdir()
+                .map_err(|error| format!("cannot create temporary import directory: {error}"))?;
+            let repository = checkout.path().join("repository.git");
+            let repository_path = repository
+                .to_str()
+                .ok_or("temporary import path is not valid UTF-8")?;
+            run_interactive(
+                "git",
+                &["clone", "--mirror", "--", &source, repository_path],
+            )
+            .map_err(|error| format!("source clone failed: {error}"))?;
+            run_interactive(
+                "git",
+                &[
+                    "--git-dir",
+                    repository_path,
+                    "push",
+                    "--mirror",
+                    "--",
+                    &destination,
+                ],
+            )
+            .map_err(|error| format!("InfiniGit push failed: {error}"))?;
+            Ok(format!(
+                "Imported every branch and tag from {source} into {destination}."
+            ))
+        }
         AuthCommand::Login {
             name,
             auth,
@@ -502,5 +561,46 @@ mod tests {
             .is_err()
         );
         assert!(parse(&["wrong".into()]).is_err());
+    }
+
+    #[test]
+    fn parses_repository_import_and_rejects_non_infinigit_destinations() {
+        assert_eq!(
+            parse(&[
+                "import".into(),
+                "https://example.com/team/project.git".into(),
+                "igit://infinigit.com/alice/project".into(),
+            ])
+            .unwrap(),
+            AuthCommand::Import {
+                source: "https://example.com/team/project.git".into(),
+                destination: "igit://infinigit.com/alice/project".into(),
+            }
+        );
+        assert!(
+            parse(&[
+                "import".into(),
+                "--upload-pack=evil".into(),
+                "igit://infinigit.com/alice/project".into()
+            ])
+            .is_err()
+        );
+        assert!(
+            parse(&[
+                "import".into(),
+                "https://example.com/repo.git".into(),
+                "https://example.com/other.git".into()
+            ])
+            .is_err()
+        );
+        assert!(
+            parse(&[
+                "import".into(),
+                "source".into(),
+                "igit://host/repo".into(),
+                "extra".into()
+            ])
+            .is_err()
+        );
     }
 }

@@ -10,6 +10,19 @@ infinigit auth status
 infinigit auth link-device --name work-laptop --label "Work laptop"
 ```
 
+Import an existing repository after creating an empty destination in the
+InfiniGit browser:
+
+```bash
+infinigit import https://github.com/example/project.git \
+  igit://infinigit.com/alice/project
+```
+
+The import uses a temporary mirror clone and mirror push, preserving every
+branch, tag, and canonical Git object ID. The temporary clone is removed on
+success or failure. The destination must use `igit://`; authenticate or link
+the CLI device before importing a private repository.
+
 The CLI uses `icp identity link web` to obtain an Internet Identity delegation
 for the InfiniGit app origin, stores the session key using ICP CLI's selected
 storage backend, and configures Git to select that identity only for InfiniGit

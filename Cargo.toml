@@ -11,9 +11,9 @@ keywords = ["git", "icp", "internet-computer", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 publish = ["crates-io"]
 
+[dependencies]
+tempfile = "3.27"
+
 [[bin]]
 name = "infinigit"
 path = "src/main.rs"
-
-[dev-dependencies]
-tempfile = "3.13"

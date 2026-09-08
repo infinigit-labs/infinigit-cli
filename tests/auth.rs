@@ -12,6 +12,38 @@ fn path_with(directory: &Path) -> String {
 }
 
 #[test]
+fn import_mirror_clones_and_pushes_every_ref_without_shell_interpolation() {
+    let temp = TempDir::new().unwrap();
+    let git = temp.path().join("git");
+    let log = temp.path().join("git.log");
+    fs::write(
+        &git,
+        r#"#!/usr/bin/env bash
+set -e
+printf '%s\n' "$*" >>"$INFINIGIT_TEST_GIT_LOG"
+if [[ "$1" == clone ]]; then mkdir -p "${@: -1}"; fi
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_infinigit"))
+        .args([
+            "import",
+            "https://example.com/team/repository.git",
+            "igit://localhost/alice/repository",
+        ])
+        .env("PATH", path_with(temp.path()))
+        .env("INFINIGIT_TEST_GIT_LOG", &log)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let calls = fs::read_to_string(log).unwrap();
+    assert!(calls.contains("clone --mirror -- https://example.com/team/repository.git"));
+    assert!(calls.contains("push --mirror -- igit://localhost/alice/repository"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("every branch and tag"));
+}
+
+#[test]
 fn login_status_and_logout_use_icp_web_delegation_and_git_identity_config() {
     let temp = TempDir::new().unwrap();
     let icp = temp.path().join("icp");
