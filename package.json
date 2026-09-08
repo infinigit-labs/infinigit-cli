@@ -1,9 +1,12 @@
 {
   "name": "infinigit-cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Browser-linked Internet Identity CLI for InfiniGit",
   "license": "Apache-2.0",
-  "repository": "github:infinigit-labs/infinigit-cli",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/infinigit-labs/infinigit-cli.git"
+  },
   "homepage": "https://infinigit.com",
   "os": ["darwin", "linux", "win32"],
   "cpu": ["x64", "arm64"],
