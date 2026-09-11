@@ -432,17 +432,34 @@ if [[ "$*" == *'request_device_link'* ]]; then printf 'variant { ok = record { i
 }
 
 #[test]
-fn device_link_requires_a_directory_until_mainnet_is_deployed() {
+fn device_link_uses_the_production_directory_by_default() {
     let temp = TempDir::new().unwrap();
+    let icp = temp.path().join("icp");
+    let log = temp.path().join("icp.log");
+    fs::write(&icp, r#"#!/usr/bin/env bash
+set -e
+printf '%s\n' "$*" >>"$INFINIGIT_TEST_ICP_LOG"
+if [[ "$*" == 'identity list -q' ]]; then exit 0; fi
+if [[ "$*" == *'request_device_link'* ]]; then printf 'variant { ok = record { id = 10 : nat } }\n'; fi
+"#).unwrap();
+    fs::set_permissions(&icp, fs::Permissions::from_mode(0o755)).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_infinigit"))
         .args(["auth", "link-device", "--name", "mainnet-device"])
         .env_remove("INFINIGIT_DIRECTORY_CANISTER_ID")
         .env("PATH", path_with(temp.path()))
         .env("GIT_CONFIG_GLOBAL", temp.path().join("gitconfig"))
+        .env("INFINIGIT_TEST_ICP_LOG", &log)
         .output()
         .unwrap();
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("pass --directory"));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let calls = fs::read_to_string(log).unwrap();
+    assert!(calls.contains("canister call vc3gg-2qaaa-aaaae-qklda-cai request_device_link"));
+    assert!(calls.contains("--network ic"));
+    assert!(!calls.contains("--root-key"));
 
     let output = Command::new(env!("CARGO_BIN_EXE_infinigit"))
         .args(["auth", "link-device", "--name", "invalid-local-mode"])

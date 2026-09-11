@@ -11,6 +11,7 @@ const DEFAULT_IDENTITY: &str = "infinigit";
 const DEFAULT_AUTH: &str = "https://id.ai";
 const DEFAULT_APP: &str = "https://infinigit.com";
 const DEFAULT_NETWORK: &str = "ic";
+const DEFAULT_DIRECTORY: &str = "vc3gg-2qaaa-aaaae-qklda-cai";
 
 #[derive(Debug, PartialEq, Eq)]
 enum AuthCommand {
@@ -165,7 +166,13 @@ fn parse(args: &[String]) -> Result<AuthCommand, String> {
                         })
                         .flatten()
                 })
-                .unwrap_or_default();
+                .unwrap_or_else(|| {
+                    if local_dev {
+                        String::new()
+                    } else {
+                        DEFAULT_DIRECTORY.into()
+                    }
+                });
             let network_fallback = env::var("INFINIGIT_NETWORK")
                 .ok()
                 .or_else(|| {
@@ -403,7 +410,7 @@ fn execute(command: AuthCommand) -> Result<String, String> {
             network,
             root_key,
         } => {
-            let directory = directory.ok_or("InfiniGit is not deployed at a default mainnet canister yet; pass --directory <canister-id>, or use the complete local command printed by start-local.sh")?;
+            let directory = directory.ok_or("a directory canister is required; pass --directory <canister-id>")?;
             let identities = run("icp", &["identity", "list", "-q"])?;
             let exists = identities.lines().any(|existing| existing == name);
             if exists && !reuse_existing {
