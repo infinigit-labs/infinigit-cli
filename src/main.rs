@@ -409,22 +409,24 @@ fn execute(command: AuthCommand) -> Result<String, String> {
                 .map(|byte| format!("{byte:02x}"))
                 .collect::<String>();
             let candid = format!("(\"{label}\", \"{digest}\", true, {}, null)", !read_only);
-            let response = run(
-                "icp",
-                &[
-                    "canister",
-                    "call",
-                    &directory,
-                    "request_device_link",
-                    &candid,
-                    "--identity",
-                    &name,
-                    "--network",
-                    &network,
-                    "--root-key",
-                    &root_key,
-                ],
-            )?;
+            let mut call = vec![
+                "canister",
+                "call",
+                directory.as_str(),
+                "request_device_link",
+                candid.as_str(),
+                "--identity",
+                name.as_str(),
+                "--network",
+                network.as_str(),
+            ];
+            // Named networks such as `ic` already define their trust root, and
+            // icp-cli rejects --root-key for them. Explicit replica URLs need
+            // the flag so local development can fetch or pin a root key.
+            if network.contains("://") {
+                call.extend(["--root-key", root_key.as_str()]);
+            }
+            let response = run("icp", &call)?;
             let marker = "id = ";
             let id = response
                 .find(marker)

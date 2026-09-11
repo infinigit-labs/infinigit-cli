@@ -288,7 +288,8 @@ if [[ "$*" == *'request_device_link'* ]]; then printf 'variant { ok = record { i
     );
     let calls = fs::read_to_string(log).unwrap();
     assert!(calls.contains("identity new headless --storage plaintext"));
-    assert!(calls.contains("--network ic --root-key mainnet"));
+    assert!(calls.contains("--network ic"));
+    assert!(!calls.contains("--root-key"));
 }
 
 #[test]
