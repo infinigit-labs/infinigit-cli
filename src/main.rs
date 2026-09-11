@@ -4,7 +4,7 @@ use std::{
     env,
     fs::File,
     io::Read,
-    process::{Command, ExitCode},
+    process::{Command, ExitCode, Stdio},
 };
 
 const DEFAULT_IDENTITY: &str = "infinigit";
@@ -254,6 +254,20 @@ fn run(program: &str, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
+fn run_with_prompt(program: &str, args: &[&str]) -> Result<String, String> {
+    let output = Command::new(program)
+        .args(args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .output()
+        .map_err(|error| format!("cannot run {program}: {error}"))?;
+    if !output.status.success() {
+        return Err(format!("{program} failed"));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
 fn run_interactive(program: &str, args: &[&str]) -> Result<(), String> {
     let status = Command::new(program)
         .args(args)
@@ -426,7 +440,7 @@ fn execute(command: AuthCommand) -> Result<String, String> {
             if network.contains("://") {
                 call.extend(["--root-key", root_key.as_str()]);
             }
-            let response = run("icp", &call)?;
+            let response = run_with_prompt("icp", &call)?;
             let marker = "id = ";
             let id = response
                 .find(marker)

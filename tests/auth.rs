@@ -247,7 +247,7 @@ fn device_link_defaults_to_passwordless_local_storage() {
 set -e
 printf '%s\n' "$*" >>"$INFINIGIT_TEST_ICP_LOG"
 if [[ "$*" == 'identity list -q' ]]; then exit 0; fi
-if [[ "$*" == *'request_device_link'* ]]; then printf 'variant { ok = record { id = 7 : nat } }\n'; fi
+if [[ "$*" == *'request_device_link'* ]]; then printf 'interactive password prompt\n' >&2; printf 'variant { ok = record { id = 7 : nat } }\n'; fi
 "#).unwrap();
     fs::set_permissions(&icp, fs::Permissions::from_mode(0o755)).unwrap();
     let config = temp.path().join("gitconfig");
@@ -286,6 +286,7 @@ if [[ "$*" == *'request_device_link'* ]]; then printf 'variant { ok = record { i
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("interactive password prompt"));
     let calls = fs::read_to_string(log).unwrap();
     assert!(calls.contains("identity new headless --storage plaintext"));
     assert!(calls.contains("--network ic"));
