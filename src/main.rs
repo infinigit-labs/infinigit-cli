@@ -1,4 +1,4 @@
-//! InfiniGit command-line authentication and configuration.
+//! infinigit command-line authentication and configuration.
 
 use std::{
     env,
@@ -331,7 +331,7 @@ fn execute(command: AuthCommand) -> Result<String, String> {
                     &destination,
                 ],
             )
-            .map_err(|error| format!("InfiniGit push failed: {error}"))?;
+            .map_err(|error| format!("infinigit push failed: {error}"))?;
             Ok(format!(
                 "Imported every branch and tag from {source} into {destination}."
             ))
@@ -366,20 +366,20 @@ fn execute(command: AuthCommand) -> Result<String, String> {
             configure(&name, Some(&auth), Some(&app))?;
             let principal = run("icp", &["identity", "principal", "--identity", &name])?;
             Ok(format!(
-                "Signed in to InfiniGit as {principal}. Git will use the linked identity '{name}'."
+                "Signed in to infinigit as {principal}. Git will use the linked identity '{name}'."
             ))
         }
         AuthCommand::Status { name } => {
             let principal = run("icp", &["identity", "principal", "--identity", &name])?;
             Ok(format!(
-                "InfiniGit identity: {name}\nPrincipal: {principal}"
+                "infinigit identity: {name}\nPrincipal: {principal}"
             ))
         }
         AuthCommand::Reauth { name } => {
             run_interactive("icp", &["identity", "reauth", &name])?;
             configure(&name, None, None)?;
             let principal = run("icp", &["identity", "principal", "--identity", &name])?;
-            Ok(format!("InfiniGit delegation refreshed for {principal}."))
+            Ok(format!("infinigit delegation refreshed for {principal}."))
         }
         AuthCommand::Logout { name } => {
             let configured = run(
@@ -388,7 +388,7 @@ fn execute(command: AuthCommand) -> Result<String, String> {
             )?;
             if configured != name {
                 return Err(format!(
-                    "refusing to delete identity '{name}' because it is not the configured InfiniGit identity"
+                    "refusing to delete identity '{name}' because it is not the configured infinigit identity"
                 ));
             }
             run("icp", &["identity", "delete", &name])?;
@@ -397,7 +397,7 @@ fn execute(command: AuthCommand) -> Result<String, String> {
                 &["config", "--global", "--unset-all", "infinigit.identity"],
             );
             Ok(format!(
-                "Removed InfiniGit identity '{name}' from this device."
+                "Removed infinigit identity '{name}' from this device."
             ))
         }
         AuthCommand::LinkDevice {

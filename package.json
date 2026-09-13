@@ -1,7 +1,7 @@
 {
   "name": "infinigit-cli",
   "version": "0.1.6",
-  "description": "Browser-linked Internet Identity CLI for InfiniGit",
+  "description": "Browser-linked Internet Identity CLI for infinigit",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

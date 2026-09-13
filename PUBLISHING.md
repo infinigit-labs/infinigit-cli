@@ -1,4 +1,4 @@
-# Publishing InfiniGit CLI
+# Publishing infinigit CLI
 
 Releases publish the same version through three channels:
 
@@ -66,7 +66,7 @@ git push origin main
 Create and push an annotated tag only after `main` CI passes:
 
 ```bash
-git tag -a v0.2.0 -m "InfiniGit CLI v0.2.0"
+git tag -a v0.2.0 -m "infinigit CLI v0.2.0"
 git push origin v0.2.0
 ```
 
