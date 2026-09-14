@@ -12,6 +12,12 @@ categories = ["command-line-utilities", "development-tools"]
 publish = ["crates-io"]
 
 [dependencies]
+candid = "0.10"
+hex = "0.4"
+ic-vetkeys = "0.7"
+rand = "0.8"
+rpassword = "7.4"
+serde = { version = "1", features = ["derive"] }
 tempfile = "3.27"
 
 [[bin]]
