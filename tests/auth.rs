@@ -36,7 +36,11 @@ if [[ "$1" == clone ]]; then mkdir -p "${@: -1}"; fi
         .env("INFINIGIT_TEST_GIT_LOG", &log)
         .output()
         .unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let calls = fs::read_to_string(log).unwrap();
     assert!(calls.contains("clone --mirror -- https://example.com/team/repository.git"));
     assert!(calls.contains("push --mirror -- igit://localhost/alice/repository"));

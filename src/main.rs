@@ -2,8 +2,8 @@
 
 use candid::{CandidType, Decode, Encode, Principal};
 use ic_vetkeys::{DerivedPublicKey, EncryptedVetKey, TransportSecretKey};
-use rand::rngs::OsRng;
 use rand::RngCore;
+use rand::rngs::OsRng;
 use serde::Deserialize;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -22,6 +22,12 @@ const DEFAULT_DIRECTORY: &str = "vc3gg-2qaaa-aaaae-qklda-cai";
 
 #[derive(Debug, PartialEq, Eq)]
 enum AuthCommand {
+    RepositoryAccess {
+        args: Vec<String>,
+    },
+    OrganizationMembers {
+        args: Vec<String>,
+    },
     Secrets {
         args: Vec<String>,
     },
@@ -83,6 +89,22 @@ fn local_development() -> Result<bool, String> {
 }
 
 fn parse(args: &[String]) -> Result<AuthCommand, String> {
+    if args.first().map(String::as_str) == Some("repo") {
+        if args.get(1).map(String::as_str) != Some("access") || args.len() < 3 {
+            return Err("usage: infinigit repo access <list|grant|revoke> [options]".into());
+        }
+        return Ok(AuthCommand::RepositoryAccess {
+            args: args[2..].to_vec(),
+        });
+    }
+    if args.first().map(String::as_str) == Some("org") {
+        if args.get(1).map(String::as_str) != Some("members") || args.len() < 3 {
+            return Err("usage: infinigit org members <list|invite|role|remove|invitations|accept|reject> [options]".into());
+        }
+        return Ok(AuthCommand::OrganizationMembers {
+            args: args[2..].to_vec(),
+        });
+    }
     if args.first().map(String::as_str) == Some("secrets") {
         if args.len() < 2 {
             return Err("usage: infinigit secrets <vaults|create|list|set|unset|put|pull|run|delete|access>".into());
@@ -114,7 +136,7 @@ fn parse(args: &[String]) -> Result<AuthCommand, String> {
         });
     }
     if args.first().map(String::as_str) != Some("auth") {
-        return Err("usage: infinigit <auth|import|secrets> [options]".into());
+        return Err("usage: infinigit <auth|import|repo|org|secrets> [options]".into());
     }
     let action = args
         .get(1)
@@ -373,10 +395,240 @@ struct Route {
 struct Namespace {
     owner: Principal,
 }
-type CanisterResult<T> = std::result::Result<T, String>;
+#[allow(non_camel_case_types)]
+#[derive(CandidType, Deserialize, Clone, Debug)]
+enum RepositoryPermission {
+    read,
+    write,
+    admin,
+}
+#[derive(CandidType, Deserialize)]
+struct CollaboratorGrant {
+    principal: Principal,
+    permission: RepositoryPermission,
+}
+#[allow(non_camel_case_types)]
+#[derive(CandidType, Deserialize, Clone, Debug)]
+enum OrganizationRole {
+    owner,
+    admin,
+    member,
+}
+#[derive(CandidType, Deserialize)]
+struct OrganizationMemberView {
+    username: String,
+    role: OrganizationRole,
+}
+#[derive(CandidType, Deserialize)]
+struct OrganizationView {
+    members: Vec<OrganizationMemberView>,
+}
+#[derive(CandidType, Deserialize)]
+struct OrganizationInvitationView {
+    id: u128,
+    organization: String,
+    username: String,
+    role: OrganizationRole,
+}
+#[allow(non_camel_case_types)]
+#[derive(CandidType, Deserialize)]
+enum CanisterResult<T> {
+    ok(T),
+    err(String),
+}
+
+impl<T> CanisterResult<T> {
+    fn into_result(self) -> Result<T, String> {
+        match self {
+            Self::ok(value) => Ok(value),
+            Self::err(message) => Err(message),
+        }
+    }
+}
 
 fn config(key: &str, fallback: &str) -> String {
     run("git", &["config", "--global", "--get", key]).unwrap_or_else(|_| fallback.into())
+}
+
+fn directory_canister() -> String {
+    env::var("INFINIGIT_DIRECTORY_CANISTER_ID")
+        .unwrap_or_else(|_| config("infinigit.directory-canister", DEFAULT_DIRECTORY))
+}
+
+fn resolve_subject(value: &str) -> Result<(Principal, String), String> {
+    let value = value.strip_prefix('@').unwrap_or(value);
+    if let Ok(principal) = Principal::from_text(value) {
+        if principal == Principal::anonymous() {
+            return Err("the anonymous principal cannot receive access".into());
+        }
+        return Ok((principal, value.into()));
+    }
+    let bytes = icp_call(
+        &directory_canister(),
+        "resolve_namespace",
+        Encode!(&value).map_err(|error| error.to_string())?,
+        true,
+    )?;
+    let owner = Decode!(&bytes, CanisterResult<Namespace>)
+        .map_err(|error| error.to_string())?
+        .into_result()?
+        .owner;
+    Ok((owner, format!("@{value}")))
+}
+
+fn parse_repository_permission(value: &str) -> Result<RepositoryPermission, String> {
+    match value {
+        "read" => Ok(RepositoryPermission::read),
+        "write" => Ok(RepositoryPermission::write),
+        "admin" => Ok(RepositoryPermission::admin),
+        _ => Err("permission must be read, write, or admin".into()),
+    }
+}
+
+fn parse_organization_role(value: &str) -> Result<OrganizationRole, String> {
+    match value {
+        "member" => Ok(OrganizationRole::member),
+        "admin" => Ok(OrganizationRole::admin),
+        "owner" => Ok(OrganizationRole::owner),
+        _ => Err("role must be member, admin, or owner".into()),
+    }
+}
+
+fn execute_repository_access(args: Vec<String>) -> Result<String, String> {
+    let action = args.first().map(String::as_str).ok_or(
+        "usage: infinigit repo access <list|grant|revoke> [subject] [permission] [--repo URL]",
+    )?;
+    let route = resolve_route(&args)?;
+    match action {
+        "list" => {
+            let bytes = icp_call(
+                &route.shard.to_text(),
+                "list_collaborators",
+                Encode!(&route.owner, &route.storage_id).map_err(|error| error.to_string())?,
+                true,
+            )?;
+            let grants = Decode!(&bytes, CanisterResult<Vec<CollaboratorGrant>>)
+                .map_err(|error| error.to_string())?
+                .into_result()?;
+            Ok(grants
+                .into_iter()
+                .map(|grant| format!("{}\t{:?}", grant.principal, grant.permission))
+                .collect::<Vec<_>>()
+                .join("\n"))
+        }
+        "grant" => {
+            let subject = args.get(1).ok_or(
+                "usage: infinigit repo access grant <username-or-principal> <read|write|admin> [--repo URL]",
+            )?;
+            let permission = parse_repository_permission(args.get(2).map(String::as_str).ok_or(
+                "usage: infinigit repo access grant <username-or-principal> <read|write|admin> [--repo URL]",
+            )?)?;
+            let (principal, label) = resolve_subject(subject)?;
+            let bytes = icp_call(
+                &directory_canister(),
+                "grant_repository_collaborator",
+                Encode!(&route.namespace, &route.name, &principal, &permission)
+                    .map_err(|error| error.to_string())?,
+                false,
+            )?;
+            Decode!(&bytes, CanisterResult<Route>)
+                .map_err(|error| error.to_string())?
+                .into_result()?;
+            Ok(format!(
+                "Granted {label} {:?} access to {}/{}.",
+                permission, route.namespace, route.name
+            ))
+        }
+        "revoke" => {
+            let subject = args.get(1).ok_or(
+                "usage: infinigit repo access revoke <username-or-principal> [--repo URL]",
+            )?;
+            let (principal, label) = resolve_subject(subject)?;
+            let bytes = icp_call(
+                &directory_canister(),
+                "revoke_repository_collaborator",
+                Encode!(&route.namespace, &route.name, &principal)
+                    .map_err(|error| error.to_string())?,
+                false,
+            )?;
+            Decode!(&bytes, CanisterResult<Route>)
+                .map_err(|error| error.to_string())?
+                .into_result()?;
+            Ok(format!(
+                "Revoked {label} access to {}/{}.",
+                route.namespace, route.name
+            ))
+        }
+        _ => Err("usage: infinigit repo access <list|grant|revoke> [options]".into()),
+    }
+}
+
+fn execute_organization_members(args: Vec<String>) -> Result<String, String> {
+    let action = args.first().map(String::as_str).ok_or(
+        "usage: infinigit org members <list|invite|role|remove|invitations|accept|reject> [options]",
+    )?;
+    let directory = directory_canister();
+    match action {
+        "invitations" => {
+            let bytes = icp_call(&directory, "list_my_organization_invitations", Encode!().unwrap(), true)?;
+            let invitations = Decode!(&bytes, CanisterResult<Vec<OrganizationInvitationView>>)
+                .map_err(|error| error.to_string())?
+                .into_result()?;
+            Ok(invitations.into_iter().map(|invitation| format!("{}\t{}\t{}\t{:?}", invitation.id, invitation.organization, invitation.username, invitation.role)).collect::<Vec<_>>().join("\n"))
+        }
+        "accept" | "reject" => {
+            let id = args.get(1).ok_or("invitation id is required")?.parse::<u128>()
+                .map_err(|_| "invitation id must be a non-negative integer")?;
+            let method = if action == "accept" { "accept_organization_invitation" } else { "reject_organization_invitation" };
+            let bytes = icp_call(&directory, method, Encode!(&id).map_err(|error| error.to_string())?, false)?;
+            if action == "accept" {
+                Decode!(&bytes, CanisterResult<OrganizationView>)
+                    .map_err(|error| error.to_string())?
+                    .into_result()?;
+            } else {
+                Decode!(&bytes, CanisterResult<()>)
+                    .map_err(|error| error.to_string())?
+                    .into_result()?;
+            }
+            Ok(format!("{} organization invitation {id}.", if action == "accept" { "Accepted" } else { "Rejected" }))
+        }
+        "list" => {
+            let organization = args.get(1).ok_or("organization slug is required")?;
+            let bytes = icp_call(&directory, "get_organization", Encode!(organization).map_err(|error| error.to_string())?, true)?;
+            let view = Decode!(&bytes, CanisterResult<OrganizationView>)
+                .map_err(|error| error.to_string())?
+                .into_result()?;
+            Ok(view.members.into_iter().map(|member| format!("{}\t{:?}", member.username, member.role)).collect::<Vec<_>>().join("\n"))
+        }
+        "invite" | "role" | "remove" => {
+            let organization = args.get(1).ok_or("organization slug is required")?;
+            let subject = args.get(2).ok_or("username or principal is required")?;
+            let (principal, label) = resolve_subject(subject)?;
+            let method = match action {
+                "invite" => "invite_organization_principal",
+                "role" => "set_organization_principal_role",
+                _ => "remove_organization_principal",
+            };
+            let bytes = if action == "remove" {
+                icp_call(&directory, method, Encode!(organization, &principal).map_err(|error| error.to_string())?, false)?
+            } else {
+                let role = parse_organization_role(args.get(3).map(String::as_str).ok_or("role must be member, admin, or owner")?)?;
+                icp_call(&directory, method, Encode!(organization, &principal, &role).map_err(|error| error.to_string())?, false)?
+            };
+            if action == "invite" {
+                Decode!(&bytes, CanisterResult<OrganizationInvitationView>)
+                    .map_err(|error| error.to_string())?
+                    .into_result()?;
+                Ok(format!("Invited {label} to {organization}. They can accept with `infinigit org members invitations`, then `infinigit org members accept <id>`."))
+            } else {
+                Decode!(&bytes, CanisterResult<OrganizationView>)
+                    .map_err(|error| error.to_string())?
+                    .into_result()?;
+                Ok(format!("{} {label} {} {organization}.", if action == "role" { "Updated" } else { "Removed" }, if action == "role" { "in" } else { "from" }))
+            }
+        }
+        _ => Err("usage: infinigit org members <list|invite|role|remove|invitations|accept|reject> [options]".into()),
+    }
 }
 
 fn icp_call(canister: &str, method: &str, args: Vec<u8>, query: bool) -> Result<Vec<u8>, String> {
@@ -418,9 +670,9 @@ fn repository_arg(args: &[String]) -> Result<(String, String), String> {
             .cloned()
             .ok_or("--repo requires an igit URL")?
     } else {
-        run("git", &["remote", "get-url", "origin"]).map_err(|_| {
-            "not in an infinigit checkout; pass --repo igit://host/namespace/repository"
-        })?
+        run("git", &["remote", "get-url", "origin"]).map_err(
+            |_| "not in an infinigit checkout; pass --repo igit://host/namespace/repository",
+        )?
     };
     let path = url
         .strip_prefix("igit://")
@@ -450,6 +702,7 @@ fn resolve_route(args: &[String]) -> Result<Route, String> {
     )?;
     Decode!(&bytes, CanisterResult<Route>)
         .map_err(|e| e.to_string())?
+        .into_result()
         .map_err(|_| "repository not found".into())
 }
 
@@ -460,7 +713,9 @@ fn list_vaults(route: &Route) -> Result<Vec<VaultSummary>, String> {
         Encode!(&route.owner, &route.storage_id).map_err(|e| e.to_string())?,
         true,
     )?;
-    Decode!(&bytes, CanisterResult<Vec<VaultSummary>>).map_err(|e| e.to_string())?
+    Decode!(&bytes, CanisterResult<Vec<VaultSummary>>)
+        .map_err(|e| e.to_string())?
+        .into_result()
 }
 fn get_vault(route: &Route, vault: &str) -> Result<VaultSnapshot, String> {
     let bytes = icp_call(
@@ -469,7 +724,9 @@ fn get_vault(route: &Route, vault: &str) -> Result<VaultSnapshot, String> {
         Encode!(&route.owner, &route.storage_id, &vault).map_err(|e| e.to_string())?,
         true,
     )?;
-    Decode!(&bytes, CanisterResult<VaultSnapshot>).map_err(|e| e.to_string())?
+    Decode!(&bytes, CanisterResult<VaultSnapshot>)
+        .map_err(|e| e.to_string())?
+        .into_result()
 }
 fn vault_material(
     route: &Route,
@@ -485,7 +742,9 @@ fn vault_material(
         Encode!().map_err(|e| e.to_string())?,
         false,
     )?;
-    let public = Decode!(&public_bytes, CanisterResult<Vec<u8>>).map_err(|e| e.to_string())??;
+    let public = Decode!(&public_bytes, CanisterResult<Vec<u8>>)
+        .map_err(|e| e.to_string())?
+        .into_result()?;
     let encrypted_bytes = icp_call(
         &route.shard.to_text(),
         "vault_encrypted_key",
@@ -499,8 +758,9 @@ fn vault_material(
         .map_err(|e| e.to_string())?,
         false,
     )?;
-    let encrypted =
-        Decode!(&encrypted_bytes, CanisterResult<Vec<u8>>).map_err(|e| e.to_string())??;
+    let encrypted = Decode!(&encrypted_bytes, CanisterResult<Vec<u8>>)
+        .map_err(|e| e.to_string())?
+        .into_result()?;
     let input = format!("{}/{}\0{}\0{}", route.owner, route.storage_id, vault, epoch);
     let key = EncryptedVetKey::deserialize(&encrypted)
         .map_err(|_| "invalid encrypted vault key")?
@@ -575,7 +835,9 @@ fn update_secrets(
         .map_err(|e| e.to_string())?,
         false,
     )?;
-    Decode!(&bytes, CanisterResult<VaultSnapshot>).map_err(|e| e.to_string())?
+    Decode!(&bytes, CanisterResult<VaultSnapshot>)
+        .map_err(|e| e.to_string())?
+        .into_result()
 }
 fn valid_secret_name(name: &str) -> bool {
     !name.is_empty()
@@ -668,11 +930,11 @@ fn execute_access(route: &Route, args: &[String]) -> Result<String, String> {
     let directory = env::var("INFINIGIT_DIRECTORY_CANISTER_ID")
         .unwrap_or_else(|_| config("infinigit.directory-canister", DEFAULT_DIRECTORY));
     match action {
-        "list" => { let bytes = icp_call(&route.shard.to_text(), "list_vault_grants", Encode!(&route.owner, &route.storage_id, vault).map_err(|e| e.to_string())?, true)?; let grants = Decode!(&bytes, CanisterResult<Vec<VaultGrant>>).map_err(|e| e.to_string())??; Ok(grants.into_iter().map(|grant| format!("{}\t{}", match grant.subject { VaultGrantSubject::user(user) => user.to_text(), VaultGrantSubject::team { organization, team } => format!("{organization}/{team}") }, permission_labels(&grant.permission))).collect::<Vec<_>>().join("\n")) },
-        "grant-user" => { let username = args.get(3).ok_or("username is required")?; let resolved = icp_call(&directory, "resolve_namespace", Encode!(username).map_err(|e| e.to_string())?, true)?; let user = Decode!(&resolved, CanisterResult<Namespace>).map_err(|e| e.to_string())??.owner; let permission = requested_permission(args)?; let bytes = icp_call(&route.shard.to_text(), "set_vault_user_grant", Encode!(&route.owner, &route.storage_id, vault, &user, &permission).map_err(|e| e.to_string())?, false)?; Decode!(&bytes, CanisterResult<()>).map_err(|e| e.to_string())??; Ok(format!("Saved {vault} access for {username}.")) },
-        "revoke-user" => { let username = args.get(3).ok_or("username is required")?; let resolved = icp_call(&directory, "resolve_namespace", Encode!(username).map_err(|e| e.to_string())?, true)?; let user = Decode!(&resolved, CanisterResult<Namespace>).map_err(|e| e.to_string())??.owner; let bytes = icp_call(&route.shard.to_text(), "revoke_vault_user_grant", Encode!(&route.owner, &route.storage_id, vault, &user).map_err(|e| e.to_string())?, false)?; Decode!(&bytes, CanisterResult<()>).map_err(|e| e.to_string())??; Ok(format!("Revoked {vault} access from {username}.")) },
-        "grant-team" => { let organization = args.get(3).ok_or("organization is required")?; let team = args.get(4).ok_or("team is required")?; let permission = requested_permission(args)?; let bytes = icp_call(&directory, "grant_vault_team", Encode!(&organization, &team, &route.namespace, &route.name, vault, &permission).map_err(|e| e.to_string())?, false)?; Decode!(&bytes, CanisterResult<()>).map_err(|e| e.to_string())??; Ok(format!("Saved {vault} access for {organization}/{team}.")) },
-        "revoke-team" => { let organization = args.get(3).ok_or("organization is required")?; let team = args.get(4).ok_or("team is required")?; let bytes = icp_call(&directory, "revoke_vault_team", Encode!(&organization, &team, &route.namespace, &route.name, vault).map_err(|e| e.to_string())?, false)?; Decode!(&bytes, CanisterResult<()>).map_err(|e| e.to_string())??; Ok(format!("Revoked {vault} access from {organization}/{team}.")) },
+        "list" => { let bytes = icp_call(&route.shard.to_text(), "list_vault_grants", Encode!(&route.owner, &route.storage_id, vault).map_err(|e| e.to_string())?, true)?; let grants = Decode!(&bytes, CanisterResult<Vec<VaultGrant>>).map_err(|e| e.to_string())?.into_result()?; Ok(grants.into_iter().map(|grant| format!("{}\t{}", match grant.subject { VaultGrantSubject::user(user) => user.to_text(), VaultGrantSubject::team { organization, team } => format!("{organization}/{team}") }, permission_labels(&grant.permission))).collect::<Vec<_>>().join("\n")) },
+        "grant-user" => { let username = args.get(3).ok_or("username is required")?; let resolved = icp_call(&directory, "resolve_namespace", Encode!(username).map_err(|e| e.to_string())?, true)?; let user = Decode!(&resolved, CanisterResult<Namespace>).map_err(|e| e.to_string())?.into_result()?.owner; let permission = requested_permission(args)?; let bytes = icp_call(&route.shard.to_text(), "set_vault_user_grant", Encode!(&route.owner, &route.storage_id, vault, &user, &permission).map_err(|e| e.to_string())?, false)?; Decode!(&bytes, CanisterResult<()>).map_err(|e| e.to_string())?.into_result()?; Ok(format!("Saved {vault} access for {username}.")) },
+        "revoke-user" => { let username = args.get(3).ok_or("username is required")?; let resolved = icp_call(&directory, "resolve_namespace", Encode!(username).map_err(|e| e.to_string())?, true)?; let user = Decode!(&resolved, CanisterResult<Namespace>).map_err(|e| e.to_string())?.into_result()?.owner; let bytes = icp_call(&route.shard.to_text(), "revoke_vault_user_grant", Encode!(&route.owner, &route.storage_id, vault, &user).map_err(|e| e.to_string())?, false)?; Decode!(&bytes, CanisterResult<()>).map_err(|e| e.to_string())?.into_result()?; Ok(format!("Revoked {vault} access from {username}.")) },
+        "grant-team" => { let organization = args.get(3).ok_or("organization is required")?; let team = args.get(4).ok_or("team is required")?; let permission = requested_permission(args)?; let bytes = icp_call(&directory, "grant_vault_team", Encode!(&organization, &team, &route.namespace, &route.name, vault, &permission).map_err(|e| e.to_string())?, false)?; Decode!(&bytes, CanisterResult<()>).map_err(|e| e.to_string())?.into_result()?; Ok(format!("Saved {vault} access for {organization}/{team}.")) },
+        "revoke-team" => { let organization = args.get(3).ok_or("organization is required")?; let team = args.get(4).ok_or("team is required")?; let bytes = icp_call(&directory, "revoke_vault_team", Encode!(&organization, &team, &route.namespace, &route.name, vault).map_err(|e| e.to_string())?, false)?; Decode!(&bytes, CanisterResult<()>).map_err(|e| e.to_string())?.into_result()?; Ok(format!("Revoked {vault} access from {organization}/{team}.")) },
         _ => Err("usage: infinigit secrets access <list|grant-user|revoke-user|grant-team|revoke-team> <vault>".into()),
     }
 }
@@ -707,8 +969,9 @@ fn execute_secrets(args: Vec<String>) -> Result<String, String> {
                 Encode!(&route.owner, &route.storage_id, vault).map_err(|e| e.to_string())?,
                 false,
             )?;
-            let created =
-                Decode!(&bytes, CanisterResult<VaultSummary>).map_err(|e| e.to_string())??;
+            let created = Decode!(&bytes, CanisterResult<VaultSummary>)
+                .map_err(|e| e.to_string())?
+                .into_result()?;
             Ok(format!("Created vault '{}'.", created.name))
         }
         "list" => {
@@ -893,8 +1156,9 @@ fn execute_secrets(args: Vec<String>) -> Result<String, String> {
                 .map_err(|e| e.to_string())?,
                 false,
             )?;
-            let updated =
-                Decode!(&bytes, CanisterResult<VaultSnapshot>).map_err(|e| e.to_string())??;
+            let updated = Decode!(&bytes, CanisterResult<VaultSnapshot>)
+                .map_err(|e| e.to_string())?
+                .into_result()?;
             Ok(format!(
                 "Rotated vault '{}' to revision {}.",
                 updated.name, updated.revision
@@ -915,7 +1179,9 @@ fn execute_secrets(args: Vec<String>) -> Result<String, String> {
                     .map_err(|e| e.to_string())?,
                 false,
             )?;
-            Decode!(&bytes, CanisterResult<()>).map_err(|e| e.to_string())??;
+            Decode!(&bytes, CanisterResult<()>)
+                .map_err(|e| e.to_string())?
+                .into_result()?;
             Ok(format!("Deleted vault '{vault_name}'."))
         }
         _ => Err(
@@ -927,6 +1193,8 @@ fn execute_secrets(args: Vec<String>) -> Result<String, String> {
 
 fn execute(command: AuthCommand) -> Result<String, String> {
     match command {
+        AuthCommand::RepositoryAccess { args } => execute_repository_access(args),
+        AuthCommand::OrganizationMembers { args } => execute_organization_members(args),
         AuthCommand::Secrets { args } => execute_secrets(args),
         AuthCommand::Import {
             source,
@@ -1173,34 +1441,42 @@ mod tests {
                 name: DEFAULT_IDENTITY.into()
             }
         );
-        assert!(parse(&[
-            "auth".into(),
-            "login".into(),
-            "--name".into(),
-            "../bad".into()
-        ])
-        .is_err());
-        assert!(parse(&[
-            "auth".into(),
-            "login".into(),
-            "--auth".into(),
-            "http://evil.example".into()
-        ])
-        .is_err());
-        assert!(parse(&[
-            "auth".into(),
-            "login".into(),
-            "--storage".into(),
-            "none".into()
-        ])
-        .is_err());
-        assert!(parse(&[
-            "auth".into(),
-            "link-device".into(),
-            "--root-key".into(),
-            "unsafe".into()
-        ])
-        .is_err());
+        assert!(
+            parse(&[
+                "auth".into(),
+                "login".into(),
+                "--name".into(),
+                "../bad".into()
+            ])
+            .is_err()
+        );
+        assert!(
+            parse(&[
+                "auth".into(),
+                "login".into(),
+                "--auth".into(),
+                "http://evil.example".into()
+            ])
+            .is_err()
+        );
+        assert!(
+            parse(&[
+                "auth".into(),
+                "login".into(),
+                "--storage".into(),
+                "none".into()
+            ])
+            .is_err()
+        );
+        assert!(
+            parse(&[
+                "auth".into(),
+                "link-device".into(),
+                "--root-key".into(),
+                "unsafe".into()
+            ])
+            .is_err()
+        );
         assert!(parse(&["wrong".into()]).is_err());
     }
 
@@ -1218,25 +1494,31 @@ mod tests {
                 destination: "igit://infinigit.com/alice/project".into(),
             }
         );
-        assert!(parse(&[
-            "import".into(),
-            "--upload-pack=evil".into(),
-            "igit://infinigit.com/alice/project".into()
-        ])
-        .is_err());
-        assert!(parse(&[
-            "import".into(),
-            "https://example.com/repo.git".into(),
-            "https://example.com/other.git".into()
-        ])
-        .is_err());
-        assert!(parse(&[
-            "import".into(),
-            "source".into(),
-            "igit://host/repo".into(),
-            "extra".into()
-        ])
-        .is_err());
+        assert!(
+            parse(&[
+                "import".into(),
+                "--upload-pack=evil".into(),
+                "igit://infinigit.com/alice/project".into()
+            ])
+            .is_err()
+        );
+        assert!(
+            parse(&[
+                "import".into(),
+                "https://example.com/repo.git".into(),
+                "https://example.com/other.git".into()
+            ])
+            .is_err()
+        );
+        assert!(
+            parse(&[
+                "import".into(),
+                "source".into(),
+                "igit://host/repo".into(),
+                "extra".into()
+            ])
+            .is_err()
+        );
     }
 
     #[test]
@@ -1260,6 +1542,62 @@ mod tests {
             }
         );
         assert!(parse(&["secrets".into()]).is_err());
+    }
+
+    #[test]
+    fn parses_repository_and_organization_access_commands() {
+        assert_eq!(
+            parse(&[
+                "repo".into(),
+                "access".into(),
+                "grant".into(),
+                "aaaaa-aa".into(),
+                "write".into(),
+            ])
+            .unwrap(),
+            AuthCommand::RepositoryAccess {
+                args: vec!["grant".into(), "aaaaa-aa".into(), "write".into()]
+            }
+        );
+        assert_eq!(
+            parse(&[
+                "org".into(),
+                "members".into(),
+                "invite".into(),
+                "acme".into(),
+                "aaaaa-aa".into(),
+                "member".into(),
+            ])
+            .unwrap(),
+            AuthCommand::OrganizationMembers {
+                args: vec![
+                    "invite".into(),
+                    "acme".into(),
+                    "aaaaa-aa".into(),
+                    "member".into(),
+                ]
+            }
+        );
+        assert!(parse(&["repo".into(), "grant".into()]).is_err());
+        assert!(parse(&["org".into(), "invite".into()]).is_err());
+    }
+
+    #[test]
+    fn validates_repository_permissions_and_organization_roles() {
+        assert!(matches!(
+            parse_repository_permission("write"),
+            Ok(RepositoryPermission::write)
+        ));
+        assert!(parse_repository_permission("owner").is_err());
+        assert!(matches!(
+            parse_organization_role("owner"),
+            Ok(OrganizationRole::owner)
+        ));
+        assert!(parse_organization_role("write").is_err());
+        assert!(resolve_subject("2vxsx-fae").is_err());
+        let (principal, label) = resolve_subject("aaaaa-aa").unwrap();
+        assert_eq!(principal, Principal::management_canister());
+        assert_eq!(label, "aaaaa-aa");
     }
 
     #[test]
